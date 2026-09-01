@@ -66,11 +66,19 @@ export default function ChatPage() {
         }
       }
       if (!gotAnswer) {
-        patch((m) => ({ ...m, content: "没有收到回答，请重试。", streaming: false }));
+        patch((m) => ({ ...m, content: "没有收到回答（服务端未返回数据），请稍后重试。", streaming: false }));
       }
     } catch (e) {
       const aborted = e instanceof DOMException && e.name === "AbortError";
-      const msg = aborted ? "响应超时（30 秒无数据），请重试" : e instanceof Error ? e.message : String(e);
+      let msg: string;
+      if (aborted) {
+        msg = "响应超时（30 秒无数据），请重试";
+      } else if (e instanceof TypeError) {
+        // fetch 网络层失败（如后端未启动/连接中断）
+        msg = "网络连接中断，请确认后端服务运行中";
+      } else {
+        msg = e instanceof Error ? e.message : String(e);
+      }
       patch((m) => ({ ...m, content: `请求失败：${msg}`, streaming: false }));
     } finally {
       window.clearTimeout(watchdog);

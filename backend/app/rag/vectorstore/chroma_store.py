@@ -59,9 +59,21 @@ class ChromaStore(VectorStore):
     def list_documents(self) -> list[dict]:
         got = self._collection.get(include=["metadatas"])
         docs: dict[str, dict] = {}
+        counts: dict[str, int] = {}
         for meta in got.get("metadatas") or []:
             if not meta:
                 continue
             doc_id = meta.get("doc_id", "unknown")
+            counts[doc_id] = counts.get(doc_id, 0) + 1
             docs.setdefault(doc_id, meta)
-        return [{"doc_id": k, **v} for k, v in docs.items()]
+        # 能出现在列表中的文档必然已完成入库（chunks 成功写入向量库），
+        # 因此 status 固定为 ingested，并顺带汇总每个 doc 的分块数。
+        return [
+            {
+                "doc_id": doc_id,
+                **meta,
+                "status": "ingested",
+                "chunk_count": counts[doc_id],
+            }
+            for doc_id, meta in docs.items()
+        ]

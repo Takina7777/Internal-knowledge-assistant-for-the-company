@@ -9,6 +9,12 @@ import {
   type DocumentInfo,
 } from "../api/client";
 
+const STATUS_META: Record<string, { text: string; color: string }> = {
+  ingested: { text: "已入库", color: "success" },
+  queued: { text: "排队中", color: "processing" },
+  failed: { text: "失败", color: "error" },
+};
+
 export default function DocumentsPage() {
   const [docs, setDocs] = useState<DocumentInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -116,8 +122,12 @@ export default function DocumentsPage() {
             {
               title: "状态",
               dataIndex: "status",
-              render: (v: string) => <Tag color={v === "ingested" ? "success" : "default"}>{v || "unknown"}</Tag>,
+              render: (v: string) => {
+                const meta = STATUS_META[v] ?? { text: v || "unknown", color: "default" };
+                return <Tag color={meta.color}>{meta.text}</Tag>;
+              },
             },
+            { title: "分块数", dataIndex: "chunk_count", width: 90 },
           ]}
           locale={{ emptyText: <Typography.Text type="secondary">暂无已入库文档</Typography.Text> }}
         />
