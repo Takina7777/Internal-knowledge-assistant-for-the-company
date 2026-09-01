@@ -1,0 +1,7 @@
+# 开发/测试依赖
+-r requirements.txt
+pytest>=8
+pytest-asyncio>=0.24
+ruff>=0.6
+# 开发用内存 Redis（无 Docker 环境的临时替代，见 scripts/dev_redis.py）
+fakeredis>=2.37
