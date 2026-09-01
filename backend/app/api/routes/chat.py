@@ -18,7 +18,7 @@ def chat(
     _current_user: dict = Depends(get_current_user),
 ) -> ChatResponse:
     try:
-        return service.run(req.question, req.session_id)
+        return service.run(req.question, req.session_id, user=_current_user)
     except RuntimeError as exc:
         # 常见于未配置 LLM_API_KEY / Ollama 未启动，给出可读错误
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -31,7 +31,7 @@ async def chat_stream(
     _current_user: dict = Depends(get_current_user),
 ) -> EventSourceResponse:
     async def event_gen():
-        async for event, payload in service.stream(req.question, req.session_id):
+        async for event, payload in service.stream(req.question, req.session_id, user=_current_user):
             yield {"data": json.dumps({"type": event, **payload}, ensure_ascii=False)}
 
     return EventSourceResponse(event_gen())

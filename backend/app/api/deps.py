@@ -1,12 +1,14 @@
-"""依赖注入：配置、服务单例、当前用户（JWT）。
+"""依赖注入：配置、服务单例、当前用户（JWT / OIDC）。
 
-SSO/OIDC 预留：定义 AuthProvider 抽象（Protocol），默认 JwtAuthProvider；
-对接公司 IdP（Keycloak / ADFS / 自建 SSO）时实现 OidcAuthProvider，
-并把 AUTH_PROVIDER 切换为 oidc 即可，业务代码零改动。
+AuthProvider 抽象：默认 JwtAuthProvider（本地账号）；切换 AUTH_PROVIDER=oidc
+并配置 OIDC_ISSUER / OIDC_CLIENT_ID 即可接入公司 IdP（Keycloak / ADFS / 自建），
+业务代码零改动。
 """
 
 from typing import Protocol
 
+import httpx
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
@@ -40,16 +42,67 @@ class JwtAuthProvider:
 
 
 class OidcAuthProvider:
-    """SSO/OIDC 认证（Phase 2）：对接公司 IdP 后实现本类。"""
+    """SSO/OIDC 认证：校验 IdP 签发的 ID Token（JWT + JWKS，默认 RS256）。
 
-    def __init__(self) -> None:
-        raise NotImplementedError(
-            "Phase 2：接入公司 SSO/OIDC（Keycloak/ADFS/自建）后实现，"
-            "并将 AUTH_PROVIDER 切换为 oidc。"
-        )
+    流程：取 token 头的 kid → 拉取 JWKS（OIDC_JWKS_URI 或从 issuer 自动发现）
+    → 用对应公钥校验签名/iss/aud/exp → 映射为用户信息（sub/name/role/department/clearance）。
+    """
 
-    def authenticate(self, token: str) -> dict | None:  # pragma: no cover
-        raise NotImplementedError
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        jwks: dict | None = None,  # 测试注入，生产走网络发现
+        issuer: str | None = None,
+        client_id: str | None = None,
+        algorithm: str | None = None,
+    ) -> None:
+        s = settings or get_settings()
+        self.issuer = (issuer or s.OIDC_ISSUER or "").rstrip("/")
+        self.client_id = client_id or s.OIDC_CLIENT_ID
+        self.algorithm = algorithm or s.OIDC_ID_TOKEN_ALG
+        self._jwks_uri = s.OIDC_JWKS_URI
+        self._jwks = jwks
+
+    def _discover_jwks_uri(self) -> str:
+        if self._jwks_uri:
+            return self._jwks_uri
+        if not self.issuer:
+            raise RuntimeError("未配置 OIDC_ISSUER")
+        resp = httpx.get(f"{self.issuer}/.well-known/openid-configuration", timeout=10)
+        resp.raise_for_status()
+        return resp.json()["jwks_uri"]
+
+    def _fetch_jwks(self) -> dict:
+        if self._jwks:
+            return self._jwks
+        resp = httpx.get(self._discover_jwks_uri(), timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def authenticate(self, token: str) -> dict | None:
+        try:
+            kid = jwt.get_unverified_header(token).get("kid")
+            jwks = self._fetch_jwks()
+            jwk = next(k for k in jwks.get("keys", []) if k.get("kid") == kid)
+            payload = jwt.decode(
+                token,
+                key=jwt.PyJWK(jwk).key,
+                algorithms=[self.algorithm],
+                audience=self.client_id,
+                issuer=self.issuer,
+                options={"require": ["exp", "iss", "aud", "sub"]},
+            )
+        except Exception:  # noqa: BLE001 - 任何校验失败一律视为未登录
+            return None
+        return {
+            "id": payload.get("sub"),
+            "username": payload.get("preferred_username") or payload.get("sub", ""),
+            "display_name": payload.get("name", ""),
+            "role": payload.get("role", "user"),
+            "department": payload.get("department", ""),
+            "clearance": int(payload.get("clearance") or 0),
+            "is_active": True,
+        }
 
 
 def get_auth_provider() -> AuthProvider:

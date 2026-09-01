@@ -7,7 +7,9 @@
 - **编排**：LangGraph（retrieve → generate → guard 状态机，支持 token 级流式）
 - **向量库**：Chroma（本地持久化）；预留 Qdrant 抽象层可平滑切换
 - **异步管道**：Celery + Redis（文档上传异步入库 + 任务状态轮询）
-- **认证**：JWT + 本地账号（bcrypt + pyjwt），预留 SSO/OIDC 适配接口
+- **认证**：JWT + 本地账号（bcrypt + pyjwt）+ SSO/OIDC（OidcAuthProvider，`AUTH_PROVIDER=oidc` 切换）
+- **权限**：检索 ACL（用户部门 + 密级过滤，admin 绕过）
+- **企业微信**：机器人已实现（回调加解密 / 主动发消息 / 异步回复）
 - **可观测**：抽象接口已预留（noop / Langfuse）
 - **前端**：React 18 + TypeScript + Vite + Ant Design（登录 / 智能问答 / 文档管理）
 
@@ -24,12 +26,12 @@
 │   │   ├── agent/            # LangGraph 状态机（state / nodes / graph / prompts）
 │   │   ├── rag/              # embeddings / chunker / parser / retrieval / vectorstore
 │   │   ├── services/         # LLM 封装 / 对话编排（含流式）
-│   │   ├── api/routes/       # health / auth / chat / documents / wecom(占位)
+│   │   ├── api/routes/       # health / auth / chat / documents / wecom
 │   │   ├── models/           # Pydantic 数据模型
-│   │   ├── wecom/            # 企业微信（Phase 2，配置占位）
+│   │   ├── wecom/            # 企业微信机器人（crypto / client / handler / routes）
 │   │   └── workers/          # Celery 应用与文档接入任务
-│   ├── scripts/              # ingest / smoke_test / dev_redis（fakeredis 开发替代）
-│   ├── tests/                # pytest（含认证测试）
+│   ├── scripts/              # ingest / smoke_test / demo_oidc / demo_acl / demo_wecom / dev_redis
+│   ├── tests/                # pytest（认证/分块/健康/ACL/OIDC/企微加密）
 │   ├── requirements.txt      # 运行依赖
 │   ├── requirements-dev.txt  # 开发/测试依赖（含 fakeredis）
 │   └── .env.example          # 复制为 .env 后填写
@@ -103,6 +105,20 @@ cd backend
 .venv\Scripts\python scripts\smoke_test.py
 ```
 
+### 6. Phase 2 功能验证（无需真实环境）
+
+没有公司 IdP / 企业微信后台 / 多部门用户时，可用三个自包含演示脚本端到端验证
+（走真实代码路径，仅把外部依赖替换为本地模拟；全部无副作用，需本机 Ollama 在跑）：
+
+```bash
+cd backend
+.venv\Scripts\python scripts\demo_oidc.py    # SSO/OIDC：本地假 IdP + 自签 ID Token → 受保护接口 200
+.venv\Scripts\python scripts\demo_acl.py     # ACL：临时 Chroma 入库受限文档 → 不同身份检索对比
+.venv\Scripts\python scripts\demo_wecom.py   # 企微：官方样例向量 URL 验证 + 加密消息回调 → success
+```
+
+单元级验证：`.venv\Scripts\python -m pytest tests -q`（25/25）。
+
 ## 配置说明（backend/.env）
 
 | 配置项 | 说明 | 默认 |
@@ -112,12 +128,16 @@ cd backend
 | `VECTOR_STORE_BACKEND` | 向量库后端 | `chroma`（`qdrant` 为 Phase 2） |
 | `CELERY_BROKER_URL` / `CELERY_RESULT_BACKEND` | Redis 地址 | `redis://localhost:6379/0`、`/1` |
 | `CELERY_DEV_NO_LUA` | fakeredis 开发模式的 kombu 兼容开关 | `false`（fakeredis 时 `true`） |
-| `AUTH_PROVIDER` | 认证方式 | `jwt`（`oidc` 为 Phase 2 SSO） |
+| `AUTH_PROVIDER` | 认证方式 | `jwt`（`oidc` 为 SSO，已实现） |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | SSO/OIDC：IdP 地址与客户端凭证（`AUTH_PROVIDER=oidc` 时必填） | 空 |
+| `OIDC_JWKS_URI` / `OIDC_ID_TOKEN_ALG` | OIDC 公钥端点（缺省自动发现）/ 验签算法 | 空 / `RS256` |
 | `JWT_SECRET` | JWT 签名密钥（生产必须换成随机长串） | dev 默认值 |
 | `JWT_ACCESS_EXPIRE_MINUTES` / `JWT_REFRESH_EXPIRE_DAYS` | 令牌有效期 | `120` / `7` |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | 首次启动自动创建的管理员 | `admin` / 请在 .env 修改 |
+| `ADMIN_DEPARTMENT` / `ADMIN_CLEARANCE` | 管理员部门/密级（ACL：admin 默认绕过过滤） | 空 / `5` |
+| `ACL_FETCH_MULTIPLIER` | ACL 过滤前的预取倍数，保证 Top-K 不缩水 | `3` |
 | `DB_PATH` | SQLite 用户库路径（相对 backend/） | `./data/app.db` |
-| `WECOM_*` | 企业微信凭证（Phase 2 占位） | 空 |
+| `WECOM_*` | 企业微信机器人凭证（corpid/agentid/secret/token/aeskey，已实现） | 空 |
 | `OBSERVABILITY_PROVIDER` | 可观测实现 | `noop`（`langfuse` 为 Phase 2） |
 | `RETRIEVE_TOP_K` / `CHUNK_SIZE` / `CHUNK_OVERLAP` | 检索与分块参数 | `5` / `800` / `100` |
 
@@ -130,9 +150,11 @@ cd backend
 | GET | `/auth/me` | 当前登录用户 |
 | POST | `/chat` | 完整回答 |
 | POST | `/chat/stream` | SSE 流式回答（token 级） |
-| POST | `/documents/upload` | 上传文档，Celery 异步入库 |
+| POST | `/documents/upload` | 上传文档，Celery 异步入库（可带 `department`/`clearance` 表单字段设 ACL） |
 | GET | `/documents/tasks/{task_id}` | 入库任务状态（PENDING/STARTED/SUCCESS/FAILURE） |
 | GET | `/documents` | 已入库文档列表 |
+| GET | `/wecom/callback` | 企业微信回调 URL 验证（无需登录） |
+| POST | `/wecom/callback` | 企业微信消息回调（无需登录，异步触发 Agent） |
 | GET | `/health` | 服务健康 |
 | GET | `/health/embedding` | Ollama bge-m3 连通性 |
 
@@ -140,24 +162,28 @@ cd backend
 
 - **登录流程**：`POST /auth/login` → 前端保存 token（localStorage）→ 请求头携带 `Authorization: Bearer <access_token>`。
 - **刷新**：access token 默认 2h 过期；`POST /auth/refresh` 轮换 refresh token（服务端哈希存储、单次有效）。
-- **SSO/OIDC（Phase 2）**：`app/api/deps.py` 定义了 `AuthProvider` 抽象；对接公司 IdP 时实现
-  `OidcAuthProvider` 并把 `AUTH_PROVIDER=oidc`，业务代码零改动。
-- **权限过滤**：检索链路（`retrieve` 节点的 `where` 条件）接入用户 ACL 属于 Phase 2 内容。
+- **SSO/OIDC（已实现）**：`app/api/deps.py` 的 `OidcAuthProvider` 校验 IdP 签发的 ID Token
+  （JWKS 拉取 + RS256 验签 + iss/aud/exp 校验）；配置 `OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET`
+  并把 `AUTH_PROVIDER=oidc` 即可，业务代码零改动。
+- **权限过滤（ACL，已实现）**：用户表含 `department`/`clearance`（密级 0-5）；检索链路按用户
+  部门 + 密级过滤（`app/rag/acl.py`），admin 绕过，实现"检索不到=答不出来"；
+  文档入库时通过 `ingest.py --department hr --clearance 3` 或上传接口表单字段设置可见范围。
 
-## 企业微信机器人（Phase 2，暂缓实现）
+## 企业微信机器人（已实现）
 
-已预留配置占位（`WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_AES_KEY`）
-与模块骨架（`app/wecom/`，见其 docstring）。启用时需：
+`app/wecom/` 已实现四个模块：`crypto.py`（WXBizMsgCrypt 官方算法）、`client.py`
+（access_token 缓存 + 主动发消息）、`handler.py`（消息 → Agent → 5 秒内回 success，
+结果异步推送）、`routes.py`（GET 验证 URL / POST 接收消息，挂载 `/api/v1/wecom/callback`）。
+启用步骤：
 
 1. 企业微信管理后台创建「自建应用」，获取 corpid / agentid / secret；
-2. 配置消息接收回调 URL（公网 HTTPS）+ 随机 Token / EncodingAESKey；
-3. 按 `app/wecom/__init__.py` 的规划实现 `crypto.py`（官方 AES 加解密）、`client.py`（主动发消息）、
-   `handler.py`（消息 → agent → 5 秒内回 success，结果异步推送），并挂载回调路由。
+2. 配置消息接收回调 URL（公网 HTTPS，指向 `/api/v1/wecom/callback`）+ 随机 Token / EncodingAESKey；
+3. 在 `backend/.env` 填入 `WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET` / `WECOM_TOKEN` / `WECOM_AES_KEY`，重启后端。
 
 ## 升级路径（Phase 2 预埋）
 
 - **向量库 Chroma → Qdrant**：实现 `app/rag/vectorstore/qdrant_store.py`（协议在 `base.py`），改 `VECTOR_STORE_BACKEND=qdrant`，业务零改动。
-- **认证 → SSO/OIDC**：实现 `app/api/deps.py` 的 `OidcAuthProvider`，改 `AUTH_PROVIDER=oidc`。
+- **认证 → SSO/OIDC**：已实现 `OidcAuthProvider`，配置 `AUTH_PROVIDER=oidc` 即可（见上文）。
 - **可观测 → Langfuse 自托管**：实现 `app/core/observability.py` 的 `LangfuseTracer`，改 `OBSERVABILITY_PROVIDER=langfuse`。
 - **会话记忆**：`build_graph()` 当前用 `InMemorySaver`，生产换 `PostgresSaver`/`SqliteSaver`。
 - **检索增强**：混合检索（BM25+向量）、Rerank 重排（见 `app/rag/retrieval.py` 注释）。

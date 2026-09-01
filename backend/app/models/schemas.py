@@ -36,10 +36,12 @@ class RefreshRequest(BaseModel):
 
 
 class UserInfo(BaseModel):
-    id: int
+    id: int | str  # JWT 本地用户为 int；OIDC 用户为 IdP 的 sub（字符串）
     username: str
     display_name: str = ""
     role: str = "user"
+    department: str = ""  # 部门（ACL 检索过滤用；空 = 无部门限制）
+    clearance: int = 0  # 密级 0-5（ACL 检索过滤用）
 
 
 class TokenResponse(BaseModel):

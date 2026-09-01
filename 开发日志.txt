@@ -80,6 +80,25 @@
   - docker-compose.yml 增加顶层 name: ek（修复中文目录名导致的项目名解析失败）
   - 验证全链路：登录 -> 上传 -> Celery(真实 Redis) -> SUCCESS -> 轮询 -> 问答
 
+【阶段 8】Phase 2 三项功能落地：SSO/OIDC + 检索权限 ACL + 企业微信机器人
+  - SSO/OIDC：实现 deps.py 的 OidcAuthProvider（JWKS 拉取/自动发现、RS256 验签、
+    iss/aud/exp/sub 校验、用户映射含 role/department/clearance）；config 新增
+    OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_CLIENT_SECRET/OIDC_JWKS_URI/OIDC_ID_TOKEN_ALG，
+    AUTH_PROVIDER=oidc 即可切换，业务代码零改动
+  - 检索权限 ACL：用户表新增 department/clearance 字段（含存量库 ALTER TABLE 自动迁移）；
+    入库链路（Celery 任务/ingest.py/上传接口）支持写入 acl_departments/acl_clearance
+    元数据（Chroma 支持 list 元数据已实测）；新增 app/rag/acl.py 按"部门+密级"过滤，
+    admin 绕过；RetrievalService 预取 3 倍再过滤保证 Top-K；用户上下文经 LangGraph
+    state 传入 retrieve 节点，实现"检索不到=答不出来"
+  - 企业微信：实现 app/wecom/ 四个模块——crypto.py(WXBizMsgCrypt 官方算法，
+    官方样例向量实测通过：签名 5c45ff5e...、明文 1616140317555161061)、
+    client.py(access_token 缓存+主动发消息)、handler.py(消息→Agent→5秒内回success，
+    结果异步推送)、routes.py(GET 验证 URL / POST 接收消息，挂载 /api/v1/wecom/callback)
+  - 依赖：沙箱下 pip 网络层挂起，改用 httpx 直连 pypi 下载 cryptography 及其依赖
+    wheel 本地离线安装；cryptography 已写入 requirements.txt
+  - 测试：新增 tests/test_acls.py(5)、test_oidc.py(6)、test_wecom_crypto.py(6)，
+    全量 pytest 25/25 通过
+
 
 三、遇到的问题与解决（按问题记录）
 --------------------------------------------------------------------
@@ -233,6 +252,43 @@
   教训：含中文的源码文件一律用 UTF-8 编辑工具修改，禁止用 PowerShell
         Get/Set-Content 读写，否则编码会被转成 GBK 损坏文件。
 
+【问题 21】pip 安装 cryptography 挂起（沙箱下 pip 网络层不可用）
+  现象：pip install cryptography 无任何输出并超时挂死；--timeout/--retries 无效。
+  排查：httpx 直连 pypi.org 与 files.pythonhosted.org 均返回 200（网络本身通），
+        只有 pip 自身挂起。
+  根因：DSH 沙箱对 pip 的底层网络/请求链路做了拦截，但普通 HTTP 客户端不受影响。
+  解决：改用 httpx 直连 pypi.org 的 JSON API 挑选 wheel（cryptography 的
+        cp311-abi3-win_amd64 + cffi 的 cp313-win_amd64 + pycparser 纯 py），
+        下载到本地目录后用 `pip install --no-index --find-links` 离线安装；
+        cryptography 已写入 requirements.txt。
+
+【问题 22】OIDC RS256 验签依赖 cryptography（新版 pyjwt 移除了 pycryptodome 回退）
+  现象：OidcAuthProvider 用 jwt.RSAAlgorithm 需要 RSA 后端，环境中未安装。
+  根因：pyjwt 2.13 起 RSA/EC 算法仅支持 cryptography（源码 requires_cryptography），
+        旧的 pycryptodome 回退已被移除。
+  解决：安装 cryptography（同时覆盖企业微信回调 AES-256-CBC 加解密，一个依赖两用）。
+
+【问题 23】企业微信官方测试向量记错导致测试失败
+  现象：test_wecom_crypto 中凭记忆填写的官方样例签名校验不通过。
+  根因：官方文档中 477715d11cdb... 是"示例二 POST 消息解密"的签名，不是 URL 验证
+        样例的签名；URL 验证样例的签名应为 5c45ff5e21c57e6ad56bac8758b79b1d9ac89fd3
+        （timestamp=1409659589 / nonce=263014780）；另超长密文手工抄写易错。
+  解决：查阅官方文档与官方样例代码确认正确向量，用「签名 + URL 验证 + 往返加密
+        解密」三组用例覆盖，去掉不可靠的手抄长密文；实测官方向量全部通过
+        （明文 echostr=1616140317555161061）。
+
+【问题 24】用户表新增字段需要存量库迁移
+  现象：老库 users 表没有 department/clearance 列，直接 SELECT 会报错。
+  根因：ACL 功能需要用户部门/密级字段，老库结构未含。
+  解决：_init_schema 中 CREATE TABLE IF NOT EXISTS 使用新结构，另加
+        _ensure_column 用 PRAGMA table_info 检测列是否存在，缺失则
+        ALTER TABLE ADD COLUMN 补列，存量库无感迁移，无需重建。
+
+【问题 25】编辑文件偶发 ReplaceFileW EIO（Win32 1175）
+  现象：edit 工具写 config.py 时报"ReplaceFileW EIO"。
+  根因：文件被瞬时占用/锁（如进程句柄、杀软扫描），原子替换失败。
+  解决：直接重试一次即成功；后续未再复现。
+
 
 四、优化操作汇总
 --------------------------------------------------------------------
@@ -253,9 +309,10 @@
 --------------------------------------------------------------------
   ✅ 后端全链路：登录 / 流式问答（带引用）/ 文档上传（Celery）/ 任务轮询
   ✅ 前端：登录页 / 智能问答 / 文档管理（含分块数、状态、自动刷新令牌）
-  ✅ 测试：pytest 8/8 通过（认证 5 + 分块 2 + 健康 1）
-  ✅ 环境：真实 Redis（Docker）就绪；Ollama bge-m3 就绪
-  ⏳ 文档状态显示修复需重启 uvicorn/celery 后生效（代码已改）
+  ✅ 测试：pytest 25/25 通过（认证 5 + 分块 2 + 健康 1 + ACL 5 + OIDC 6 + 企微加密 6）
+  ✅ 环境：真实 Redis（Docker）就绪；Ollama bge-m3 就绪；cryptography 已装
+  ✅ Phase 2 功能：SSO/OIDC（OidcAuthProvider）、检索权限 ACL、企业微信机器人均已落地
+  ⏳ 以上新功能需重启 uvicorn 后生效（代码已改）
 
  启动方式（用户终端执行，Agent 会话托管进程不持久）：
    start_dev.bat 一键启动；或分别运行
@@ -263,4 +320,29 @@
    celery worker（--pool=solo）、npm run dev
 
  管理员账号：admin / o27PBVzmzq7KBpi3（见 backend/.env，请尽快修改）
+
+
+六、Phase 2 新功能验证（无需真实环境）
+--------------------------------------------------------------------
+ 没有公司 IdP / 企业微信后台 / 多部门用户时，用三个自包含演示脚本即可
+ 端到端验证（走真实代码路径，仅把外部依赖替换为本地模拟；全部无副作用）：
+
+   1) SSO/OIDC  —— scripts/demo_oidc.py
+      本地起"假 IdP"（JWKS 端点）+ 自签 RS256 ID Token：
+      验证 OidcAuthProvider 校验（含 JWKS 拉取）、受保护接口 200、错误 audience 401。
+      运行：.venv\Scripts\python scripts\demo_oidc.py
+
+   2) 检索 ACL  —— scripts/demo_acl.py
+      临时 Chroma 入库"公开文档"+"hr/密级3 文档"，不同身份检索对比：
+      hr/密级3 命中 2 条、tech/密级1 只命中公开 1 条、admin 绕过命中 2 条。
+      （用临时目录，不污染真实知识库；需本机 Ollama bge-m3 在跑）
+      运行：.venv\Scripts\python scripts\demo_acl.py
+
+   3) 企业微信  —— scripts/demo_wecom.py
+      模拟企微服务器回调：官方样例向量 GET URL 验证返回明文
+      1616140317555161061；加密文本消息 POST 解密 → success；
+      handler 后台异步收到问题并"推送"回复（假客户端，不请求真实企微 API）。
+      运行：.venv\Scripts\python scripts\demo_wecom.py
+
+   单元级验证：.venv\Scripts\python -m pytest tests -q（25/25）
 ====================================================================

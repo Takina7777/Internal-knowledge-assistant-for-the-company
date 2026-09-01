@@ -19,9 +19,9 @@ _SENSITIVE_PATTERNS: list[tuple[str, str]] = [
 
 
 def retrieve_node(state: AgentState) -> dict:
-    """检索节点：向量检索 + 组装引用信息。"""
+    """检索节点：向量检索（按用户 ACL 过滤）+ 组装引用信息。"""
     question = state["question"]
-    results = _retrieval.search(question)
+    results = _retrieval.search(question, user=state.get("user"))
     chunks = [
         {"text": r.chunk.text, "metadata": r.chunk.metadata, "score": r.score} for r in results
     ]

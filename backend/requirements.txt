@@ -17,3 +17,4 @@ httpx>=0.27
 # 认证
 pyjwt>=2.9
 bcrypt>=4.2
+cryptography>=42  # OIDC RS256 验签 + 企业微信回调 AES 加解密

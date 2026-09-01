@@ -3,7 +3,7 @@
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.api.deps import get_current_user
 from app.core.config import get_settings
@@ -17,6 +17,8 @@ router = APIRouter(prefix="/documents", tags=["文档管理"])
 @router.post("/upload", response_model=UploadResponse, summary="上传文档并异步入库（需登录）")
 async def upload(
     file: UploadFile = File(...),
+    department: str = Form("", description="允许访问的部门（空 = 全员可读；ACL 检索过滤用）"),
+    clearance: int = Form(0, description="所需最低密级 0-5（0 = 全员可读；ACL 检索过滤用）"),
     _current_user: dict = Depends(get_current_user),
 ) -> UploadResponse:
     s = get_settings()
@@ -33,6 +35,8 @@ async def upload(
         file_path=str(path),
         doc_name=filename,
         source="upload",
+        department=department,
+        clearance=clearance,
     )
     return UploadResponse(task_id=task.id, doc_id=doc_id, filename=filename)
 

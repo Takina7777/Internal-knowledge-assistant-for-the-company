@@ -101,68 +101,66 @@
   ✅ Web 门户：登录 / 智能问答（SSE 流式、引用展示、👍👎反馈UI）/ 文档管理
   ✅ 后端 API：auth(login/refresh/me)、chat(全量+流式)、documents(上传/状态/列表)、health
   ✅ JWT 认证：本地账号、bcrypt 哈希、refresh token 轮换、路由保护
+  ✅ SSO/OIDC 后端认证：OidcAuthProvider（JWKS 拉取 + RS256 验签 + iss/aud/exp/sub 校验，
+     用户映射含 role/department/clearance）；AUTH_PROVIDER=oidc 一键切换
+  ✅ 检索权限过滤（ACL）：用户表新增部门/密级字段（存量库自动迁移）；入库元数据写入
+     acl_departments/acl_clearance；检索按用户部门+密级过滤（app/rag/acl.py），
+     admin 绕过，实现"检索不到=答不出来"
+  ✅ 企业微信机器人：crypto.py(WXBizMsgCrypt 官方算法+官方样例向量测试)、
+     client.py(access_token 缓存+主动发消息)、handler.py(消息→Agent→5秒内回success，
+     结果异步推送)、routes.py(GET 验证 URL / POST 接收消息，挂载 /api/v1/wecom/callback)
   ✅ LangGraph 编排：retrieve -> generate -> guard，token 级流式
   ✅ RAG：解析(4 种格式)、分块、bge-m3 向量化、Chroma 检索、引用溯源
   ✅ Celery 异步管道：文档异步入库 + 任务状态轮询（真实 Redis 验证通过）
   ✅ 前端令牌自动刷新（401 无感续期，7 天有效）
-  ✅ 分块/认证单元测试（pytest 8/8）
+  ✅ 单元测试：pytest 25/25（认证 5 + 分块 2 + 健康 1 + ACL 5 + OIDC 6 + 企微加密 6）
   ✅ 一键启动脚本 start_dev.bat
   ✅ 环境适配：fakeredis 开发替代、DSH 沙箱补丁（sitecustomize/RESP2/无锁）
 
 【未完成 ⏳（按优先级排序）】
-  ⏳ 1. SSO/OIDC 对接（Phase 2）
-       实现 deps.py 的 OidcAuthProvider；AUTH_PROVIDER=oidc；
-       需要公司 IdP（Keycloak/ADFS/自建）的 issuer/client_id/client_secret。
-  ⏳ 2. 检索权限过滤（ACL）
-       用户角色/部门注入 retrieve 节点的 where 条件，
-       实现"检索不到=答不出来"的权限隔离；用户表增加部门/密级字段。
-  ⏳ 3. 企业微信机器人（Phase 2）
-       按 app/wecom/ 规划实现：crypto(WXBizMsgCrypt 加解密)、
-       client(access_token 缓存+主动发消息)、handler(消息->agent->5秒内回success)；
-       需企业微信自建应用 corpid/agentid/secret + 公网回调 URL + Token/AESKey。
-  ⏳ 4. 可观测 Langfuse 自托管
+  ⏳ 1. 可观测 Langfuse 自托管
        实现 core/observability.py 的 LangfuseTracer；
        docker 部署 Langfuse；OBSERVABILITY_PROVIDER=langfuse。
-  ⏳ 5. 检索增强
+  ⏳ 2. 检索增强
        混合检索（BM25+向量融合）；Rerank 重排（bge-reranker 或云端）；
        检索参数可调（Top-K/阈值/融合权重）。
-  ⏳ 6. 会话记忆持久化
+  ⏳ 3. 会话记忆持久化
        LangGraph checkpointer 换 PostgresSaver/SqliteSaver（当前 InMemorySaver）；
        多轮上下文显式注入（当前单轮检索问答）。
-  ⏳ 7. 向量库 Qdrant 迁移
+  ⏳ 4. 向量库 Qdrant 迁移
        实现 qdrant_store.py（协议在 base.py）；VECTOR_STORE_BACKEND=qdrant；
        数据量超过 Chroma 承载或需要 HA 时执行。
-  ⏳ 8. 用户库 PostgreSQL 迁移
+  ⏳ 5. 用户库 PostgreSQL 迁移
        替换 db/user_store.py 实现（接口不变）；
        用户管理 API（创建/禁用/角色分配）。
-  ⏳ 9. 评测体系
+  ⏳ 6. 评测体系
        评测集（200~500 条真实问题，含越权/幻觉陷阱类）；
        自动回归（模型/Prompt/索引变更必须跑）；
        成本与成功率双指标看板。
-  ⏳ 10. 反馈闭环（数据飞轮）
+  ⏳ 7. 反馈闭环（数据飞轮）
        前端 👍👎 反馈落库（POST /api/v1/feedback）；
        纠错/漏检上报 -> 沉淀进评测集 -> 定期回归优化。
-  ⏳ 11. 文档源接入
+  ⏳ 8. 文档源接入
        Confluence / 飞书文档 / SharePoint connector；
        增量同步（事件驱动 + 定时兜底）。
-  ⏳ 12. 部署与运维
+  ⏳ 9. 部署与运维
        Docker Compose 一键部署全套（后端+Celery+前端+Redis[+Langfuse]）；
        HTTPS、企业微信公网回调（内网穿透/反代）；
        日志归档、审计看板、限流策略。
-  ⏳ 13. 多轮对话体验完善
+  ⏳ 10. 多轮对话体验完善
        上下文记忆 + 追问理解；会话列表/历史查询（当前仅单会话）。
-  ⏳ 14. 主动工具调用
+  ⏳ 11. 主动工具调用
        查工单/查假期/查审批（Function Calling），人审闸门（高风险动作审批）。
 
 
 七、升级路径（已预埋的扩展点）
 --------------------------------------------------------------------
   向量库 Chroma -> Qdrant    ：实现 qdrant_store.py，改配置即可
-  认证 JWT -> SSO/OIDC       ：实现 OidcAuthProvider，改配置即可
+  认证 JWT -> SSO/OIDC       ：已实现 OidcAuthProvider，AUTH_PROVIDER=oidc 改配置即可
   可观测 noop -> Langfuse    ：实现 LangfuseTracer，改配置即可
   用户库 SQLite -> PostgreSQL：替换 user_store.py 实现
   会话记忆 InMemory -> DB    ：换 checkpointer
-  企微机器人                 ：按 wecom/ 骨架实现三个模块并挂路由
+  企微机器人                 ：已实现（crypto/client/handler/routes），配置 WECOM_* + 公网回调即可上线
 
 
 八、注意事项

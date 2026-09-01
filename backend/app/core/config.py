@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_HOST: str = "http://localhost:3000"
 
-    # ---- 认证（JWT + 本地账号；AUTH_PROVIDER=oidc 时为 Phase 2 SSO）----
+    # ---- 认证（JWT + 本地账号；AUTH_PROVIDER=oidc 时为 SSO/OIDC）----
     AUTH_PROVIDER: str = "jwt"  # jwt | oidc
     JWT_SECRET: str = "dev-only-secret-change-in-production"  # 生产环境必须替换
     JWT_ALGORITHM: str = "HS256"
@@ -60,6 +60,18 @@ class Settings(BaseSettings):
     ADMIN_USERNAME: str = "admin"
     ADMIN_PASSWORD: str = "admin123"  # 首次启动自动创建管理员，请务必修改
     DB_PATH: str = "./data/app.db"  # SQLite（相对 backend/ 目录）
+
+    # ---- SSO/OIDC（AUTH_PROVIDER=oidc 时启用）----
+    OIDC_ISSUER: str = ""  # IdP issuer，如 https://sso.example.com/realms/ek
+    OIDC_CLIENT_ID: str = ""
+    OIDC_CLIENT_SECRET: str = ""
+    OIDC_JWKS_URI: str = ""  # 可选；缺省从 issuer 的 .well-known/openid-configuration 自动发现
+    OIDC_ID_TOKEN_ALG: str = "RS256"
+
+    # ---- 检索权限过滤（ACL：部门 + 密级）----
+    ADMIN_DEPARTMENT: str = ""  # 管理员部门（空 = 全部部门可访问）
+    ADMIN_CLEARANCE: int = 5  # 管理员密级（0-5，5 最高）
+    ACL_FETCH_MULTIPLIER: int = 3  # 预取倍数：ACL 过滤后仍能保证 Top-K
 
     # ---- 企业微信（Phase 2 接入，先留配置占位）----
     WECOM_CORP_ID: str = ""

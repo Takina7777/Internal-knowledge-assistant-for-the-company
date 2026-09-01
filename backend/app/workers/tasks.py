@@ -18,11 +18,24 @@ def ingest_document(
     file_path: str,
     doc_name: str = "",
     source: str = "",
+    department: str = "",
+    clearance: int = 0,
 ) -> dict:
-    """单篇文档入库；失败自动重试（最多 3 次）。"""
+    """单篇文档入库；失败自动重试（最多 3 次）。
+
+    department：允许访问的部门（空 = 全员可读）；clearance：所需最低密级（0-5）。
+    """
     try:
         text = parse_file(Path(file_path))
         items = split_markdown(text)
+
+        # ACL 元数据：department 非空时写入 acl_departments（Chroma 元数据支持 list），
+        # clearance 非 0 时写入 acl_clearance；缺失即视为全员可读（向后兼容老文档）。
+        acl_meta: dict = {}
+        if department:
+            acl_meta["acl_departments"] = [department]
+        if clearance:
+            acl_meta["acl_clearance"] = int(clearance)
 
         chunks = [
             Chunk(
@@ -34,6 +47,7 @@ def ingest_document(
                     "doc_name": doc_name or Path(file_path).name,
                     "source": source,
                     "ingested_at": datetime.now().isoformat(),
+                    **acl_meta,
                 },
             )
             for i, item in enumerate(items)

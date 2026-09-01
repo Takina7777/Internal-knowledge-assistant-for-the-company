@@ -29,11 +29,18 @@ from app.rag.vectorstore.base import Chunk
 SUPPORTED = {".md", ".markdown", ".txt", ".pdf", ".docx"}
 
 
-def ingest_file(path: Path) -> int:
+def ingest_file(path: Path, department: str = "", clearance: int = 0) -> int:
     text = parse_file(path)
     items = split_markdown(text)
 
     doc_id = path.stem
+    # ACL 元数据：department/clearance 非空时写入，缺失即全员可读
+    acl_meta: dict = {}
+    if department:
+        acl_meta["acl_departments"] = [department]
+    if clearance:
+        acl_meta["acl_clearance"] = int(clearance)
+
     chunks = [
         Chunk(
             id=f"{doc_id}::{i}",
@@ -44,6 +51,7 @@ def ingest_file(path: Path) -> int:
                 "doc_name": path.name,
                 "source": str(path),
                 "ingested_at": datetime.now().isoformat(),
+                **acl_meta,
             },
         )
         for i, item in enumerate(items)
@@ -60,6 +68,8 @@ def ingest_file(path: Path) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="本地文档批量入库（同步）")
     parser.add_argument("--path", required=True, help="文档目录或单个文件")
+    parser.add_argument("--department", default="", help="允许访问的部门（空 = 全员可读，ACL 用）")
+    parser.add_argument("--clearance", type=int, default=0, help="所需最低密级 0-5（0 = 全员可读，ACL 用）")
     args = parser.parse_args()
 
     p = Path(args.path)
@@ -72,7 +82,7 @@ def main() -> None:
     total = 0
     for f in files:
         try:
-            n = ingest_file(f)
+            n = ingest_file(f, department=args.department, clearance=args.clearance)
             total += n
             print(f"  ✓ {f.name}: {n} 块")
         except Exception as exc:  # noqa: BLE001

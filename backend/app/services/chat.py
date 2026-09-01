@@ -17,12 +17,12 @@ from app.models.schemas import ChatResponse, Citation
 _graph = build_graph()
 
 
-def run(question: str, session_id: str | None = None) -> ChatResponse:
+def run(question: str, session_id: str | None = None, user: dict | None = None) -> ChatResponse:
     """完整回答（非流式）。"""
     session_id = session_id or uuid.uuid4().hex
     start = time.perf_counter()
     result = _graph.invoke(
-        {"question": question}, config={"configurable": {"thread_id": session_id}}
+        {"question": question, "user": user}, config={"configurable": {"thread_id": session_id}}
     )
     latency_ms = int((time.perf_counter() - start) * 1000)
     citations = [Citation(**c) for c in result.get("citations", [])]
@@ -34,7 +34,11 @@ def run(question: str, session_id: str | None = None) -> ChatResponse:
     )
 
 
-async def stream(question: str, session_id: str | None = None) -> AsyncIterator[tuple[str, dict]]:
+async def stream(
+    question: str,
+    session_id: str | None = None,
+    user: dict | None = None,
+) -> AsyncIterator[tuple[str, dict]]:
     """流式回答，产出 (event, payload)：
     - ("citations", {...}) 检索完成后的引用列表
     - ("token", {"content": str}) 增量 token
@@ -45,7 +49,7 @@ async def stream(question: str, session_id: str | None = None) -> AsyncIterator[
     citations: list[dict] = []
     try:
         async for mode, data in _graph.astream(
-            {"question": question},
+            {"question": question, "user": user},
             config={"configurable": {"thread_id": session_id}},
             stream_mode=["updates", "messages"],
         ):
